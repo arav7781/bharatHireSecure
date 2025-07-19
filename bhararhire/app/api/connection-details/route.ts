@@ -2,9 +2,9 @@ import { AccessToken, AccessTokenOptions, VideoGrant } from "livekit-server-sdk"
 import { NextResponse } from "next/server";
 
 // NOTE: you are expected to define the following environment variables in `.env.local`:
-const LIVEKIT_URL="wss://app-zq7e4mya.livekit.cloud"
-const API_KEY="APIb9M9vAQQGPzD"
-const API_SECRET="2cfwPENpkrDKKhCTx15Gf9a4mDp7jBoQ13gVgW66aCp"
+const LIVEKIT_URL=""
+const API_KEY=""
+const API_SECRET=""
 
 // don't cache the results
 export const revalidate = 0;
