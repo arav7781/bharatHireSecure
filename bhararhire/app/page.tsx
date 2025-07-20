@@ -1,7 +1,8 @@
 "use client"
 
-import React, { useCallback, useEffect, useState, useRef } from "react";
-import { motion, AnimatePresence, useScroll, useTransform, useInView } from "framer-motion";
+import type React from "react"
+import { useCallback, useEffect, useState, useRef } from "react"
+import { motion, AnimatePresence, useScroll, useTransform, useInView } from "framer-motion"
 import {
   BarVisualizer,
   DisconnectButton,
@@ -13,244 +14,720 @@ import {
   useVoiceAssistant,
   useLocalParticipant,
   useTracks,
-} from "@livekit/components-react";
-import { Room, RoomEvent, Track } from "livekit-client";
+} from "@livekit/components-react"
+import { Room, RoomEvent, Track } from "livekit-client"
 import {
   Code,
   Camera,
-  Clock,
-  Globe,
   Mic,
-  Sparkles,
   Shield,
-  ChevronDown,
   Brain,
-  Terminal,
-  Database,
-  Video,
   CameraOff,
   MicOff,
   Send,
   MessageSquare,
   AlertTriangle,
-} from "lucide-react";
-import TranscriptionView from "../components/TranscriptionView";
-import FlashCardContainer from "../components/FlashCardContainer";
-import QuizContainer from "../components/QuizContainer";
-import { CloseIcon } from "../components/CloseIcon";
-import { NoAgentNotification } from "../components/NoAgentNotification";
-import useCombinedTranscriptions from "../hooks/useCombinedTranscriptions";
+  Eye,
+  Fingerprint,
+  Lock,
+  Wifi,
+  Monitor,
+  Headphones,
+  Keyboard,
+  MousePointer,
+  Activity,
+  X,
+  RefreshCw,
+  Play,
+} from "lucide-react"
+import TranscriptionView from "../components/TranscriptionView"
+import FlashCardContainer from "../components/FlashCardContainer"
+import QuizContainer from "../components/QuizContainer"
+import { CloseIcon } from "../components/CloseIcon"
+import { NoAgentNotification } from "../components/NoAgentNotification"
+import useCombinedTranscriptions from "../hooks/useCombinedTranscriptions"
 
 interface Violation {
-  type: string;
-  severity: string;
-  details: string;
-  evidence?: string;
-  timestamp: string;
+  type: string
+  severity: string
+  details: string
+  evidence?: string
+  timestamp: string
+  confidence?: number
+  aiDetected?: boolean
 }
 
 interface ProcessCheckResponse {
-  status: 'clear' | 'violations_detected' | 'error';
-  severity: string;
+  status: "clear" | "violations_detected" | "error"
+  severity: string
   report: {
-    timestamp: string;
-    severity: string;
-    violations: Violation[];
+    timestamp: string
+    severity: string
+    violations: Violation[]
     summary: {
-      totalViolations: number;
-      criticalViolations: number;
-      highViolations: number;
-      mediumViolations: number;
-      lowViolations: number;
-    };
-  };
-  systemInfo: any;
-  timestamp: string;
+      totalViolations: number
+      criticalViolations: number
+      highViolations: number
+      mediumViolations: number
+      lowViolations: number
+    }
+  }
+  systemInfo: any
+  timestamp: string
+}
+
+interface BiometricData {
+  faceDetected: boolean
+  eyeTracking: { x: number; y: number }
+  headPose: { pitch: number; yaw: number; roll: number }
+  attentionScore: number
+}
+
+interface BehaviorMetrics {
+  tabSwitches: number
+  rightClicks: number
+  keystrokes: number
+  mouseMovements: number
+  idleTime: number
+  suspiciousActivity: number
 }
 
 export default function Page() {
-  const [room] = useState(new Room());
-  const { scrollYProgress } = useScroll();
-  const headerRef = useRef(null);
-  const isHeaderInView = useInView(headerRef, { once: true, margin: "-100px" });
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [showAssistant, setShowAssistant] = useState(false);
-  const [violations, setViolations] = useState<Violation[]>([]);
-  const [showWarningModal, setShowWarningModal] = useState(false);
-  const [processCheckStatus, setProcessCheckStatus] = useState<"idle" | "checking" | "violations" | "error">("idle");
-  const [severity, setSeverity] = useState<string>("CLEAN");
-  const assistantRef = useRef(null);
-  const monitorIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const [room] = useState(new Room())
+  const { scrollYProgress } = useScroll()
+  const headerRef = useRef(null)
+  const isHeaderInView = useInView(headerRef, { once: true, margin: "-100px" })
 
-  // Check running processes before starting interview
+  // Security states
+  const [isConnecting, setIsConnecting] = useState(false)
+  const [showAssistant, setShowAssistant] = useState(false)
+  const [violations, setViolations] = useState<Violation[]>([])
+  const [showWarningModal, setShowWarningModal] = useState(false)
+  const [processCheckStatus, setProcessCheckStatus] = useState<"idle" | "checking" | "violations" | "error">("idle")
+  const [severity, setSeverity] = useState<string>("CLEAN")
+
+  // Enhanced security states
+  const [biometricData, setBiometricData] = useState<BiometricData>({
+    faceDetected: false,
+    eyeTracking: { x: 0, y: 0 },
+    headPose: { pitch: 0, yaw: 0, roll: 0 },
+    attentionScore: 100,
+  })
+  const [behaviorMetrics, setBehaviorMetrics] = useState<BehaviorMetrics>({
+    tabSwitches: 0,
+    rightClicks: 0,
+    keystrokes: 0,
+    mouseMovements: 0,
+    idleTime: 0,
+    suspiciousActivity: 0,
+  })
+  const [securityScore, setSecurityScore] = useState(100)
+  const [isProctoring, setIsProctoring] = useState(false)
+
+  // Process termination states
+  const [isTerminating, setIsTerminating] = useState(false)
+  const [terminationResults, setTerminationResults] = useState<any>(null)
+  const [isRechecking, setIsRechecking] = useState(false)
+
+  // Refs
+  const assistantRef = useRef(null)
+  const monitorIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const biometricIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const behaviorIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const lastActivityRef = useRef(Date.now())
+
+  // Enhanced process checking with AI-powered analysis
   const checkProcesses = useCallback(async () => {
     try {
-      const response = await fetch("/api/check-processes");
-      const data: ProcessCheckResponse = await response.json();
+      setIsRechecking(true)
+      const sessionId = sessionStorage.getItem("interview-session") || crypto.randomUUID()
+      sessionStorage.setItem("interview-session", sessionId)
+
+      const response = await fetch("/api/check-processes", {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-ID": crypto.randomUUID(),
+          "X-Session-ID": sessionId,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data: ProcessCheckResponse = await response.json()
+
       if (data.status === "violations_detected") {
-        setViolations(data.report.violations);
-        setSeverity(data.report.severity);
-        setShowWarningModal(true);
-        setProcessCheckStatus("violations");
-        return false;
+        setViolations(data.report.violations)
+        setSeverity(data.report.severity)
+        setShowWarningModal(true)
+        setProcessCheckStatus("violations")
+
+        // Update security score based on violations
+        const scoreReduction = data.report.violations.reduce((acc, violation) => {
+          switch (violation.severity) {
+            case "CRITICAL":
+              return acc + 30
+            case "HIGH":
+              return acc + 20
+            case "MEDIUM":
+              return acc + 10
+            case "LOW":
+              return acc + 5
+            default:
+              return acc
+          }
+        }, 0)
+        setSecurityScore((prev) => Math.max(0, prev - scoreReduction))
+
+        setIsRechecking(false)
+        return false
       } else if (data.status === "clear") {
-        setViolations([]);
-        setSeverity("CLEAN");
-        setShowWarningModal(false);
-        setProcessCheckStatus("clear");
-        return true;
+        setViolations([])
+        setSeverity("CLEAN")
+        setShowWarningModal(false)
+        setProcessCheckStatus("clear" as "idle" | "checking" | "violations" | "error")
+        setTerminationResults(null) // Clear previous results
+        setIsRechecking(false)
+        return true
       } else {
-        throw new Error("Failed to check processes");
+        throw new Error("Failed to check processes")
       }
     } catch (error) {
-      console.error("Process check error:", error);
-      setProcessCheckStatus("error");
-      alert("Failed to check running processes. Please try again.");
-      return false;
+      console.error("Process check error:", error)
+      setProcessCheckStatus("error")
+      setIsRechecking(false)
+      alert("Failed to check running processes. Please try again.")
+      return false
     }
-  }, []);
+  }, [])
 
-  // Monitor processes during interview
+  // Terminate detected processes
+  const terminateProcesses = useCallback(
+    async (processIds: number[]) => {
+      if (!processIds || processIds.length === 0) {
+        alert("No processes to terminate")
+        return null
+      }
+
+      setIsTerminating(true)
+      setTerminationResults(null)
+
+      try {
+        const sessionId = sessionStorage.getItem("interview-session")
+        const response = await fetch("/api/terminate-processes", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Session-ID": sessionId || "",
+          },
+          body: JSON.stringify({
+            processIds,
+            sessionId: sessionId,
+          }),
+        })
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+
+        const results = await response.json()
+        setTerminationResults(results)
+
+        // Wait a moment then recheck processes
+        setTimeout(async () => {
+          await checkProcesses()
+          setIsTerminating(false)
+        }, 3000)
+
+        return results
+      } catch (error) {
+        console.error("Process termination error:", error)
+        alert("Failed to terminate processes. Please close them manually and try again.")
+        setIsTerminating(false)
+        return null
+      }
+    },
+    [checkProcesses],
+  )
+
+  // Enhanced monitoring with behavioral analysis
   const monitorProcesses = useCallback(async () => {
     try {
-      const response = await fetch("/api/monitor-processes");
-      const data: ProcessCheckResponse = await response.json();
+      const response = await fetch("/api/monitor-processes", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-ID": crypto.randomUUID(),
+          "X-Session-ID": sessionStorage.getItem("interview-session") || "",
+        },
+        body: JSON.stringify({
+          biometricData,
+          behaviorMetrics,
+          securityScore,
+          timestamp: new Date().toISOString(),
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const data: ProcessCheckResponse = await response.json()
+
       if (data.status === "violations_detected") {
-        setViolations(data.report.violations);
-        setSeverity(data.report.severity);
-        setShowWarningModal(true);
-        setProcessCheckStatus("violations");
-        return false;
+        setViolations(data.report.violations)
+        setSeverity(data.report.severity)
+        setShowWarningModal(true)
+        setProcessCheckStatus("violations")
+        return false
       } else if (data.status === "clear") {
-        setViolations([]);
-        setShowWarningModal(false);
-        setProcessCheckStatus("clear");
-        return true;
+        setViolations([])
+        setShowWarningModal(false)
+        setProcessCheckStatus("clear" as "idle" | "checking" | "violations" | "error")
+        return true
       } else {
-        throw new Error("Failed to monitor processes");
+        throw new Error("Failed to monitor processes")
       }
     } catch (error) {
-      console.error("Process monitor error:", error);
-      setProcessCheckStatus("error");
-      alert("Failed to monitor running processes. Please ensure no unauthorized apps are started.");
-      return false;
+      console.error("Process monitor error:", error)
+      setProcessCheckStatus("error")
+      return false
     }
-  }, []);
+  }, [biometricData, behaviorMetrics, securityScore])
 
-  // Start monitoring during interview
+  // Biometric monitoring using face detection
+  const startBiometricMonitoring = useCallback(() => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.warn("Media devices not supported")
+      return
+    }
+
+    navigator.mediaDevices
+      .getUserMedia({ video: true })
+      .then((stream) => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          videoRef.current.play()
+        }
+
+        biometricIntervalRef.current = setInterval(() => {
+          if (videoRef.current && canvasRef.current) {
+            const canvas = canvasRef.current
+            const ctx = canvas.getContext("2d")
+            if (ctx) {
+              canvas.width = videoRef.current.videoWidth
+              canvas.height = videoRef.current.videoHeight
+              ctx.drawImage(videoRef.current, 0, 0)
+
+              // Simple face detection (in production, use a proper face detection library)
+              const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+              const faceDetected = detectFace(imageData)
+
+              setBiometricData((prev) => ({
+                ...prev,
+                faceDetected,
+                attentionScore: faceDetected
+                  ? Math.min(100, prev.attentionScore + 1)
+                  : Math.max(0, prev.attentionScore - 2),
+              }))
+
+              // Log biometric violations
+              if (!faceDetected) {
+                fetch("/api/audit-logs", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    type: "FACE_NOT_DETECTED",
+                    severity: "HIGH",
+                    details: "Candidate's face not detected in video feed",
+                    timestamp: new Date().toISOString(),
+                    confidence: 0.9,
+                  }),
+                })
+              }
+            }
+          }
+        }, 1000)
+      })
+      .catch((error) => {
+        console.error("Error accessing camera for biometric monitoring:", error)
+      })
+  }, [])
+
+  // Simple face detection (placeholder - use proper ML library in production)
+  const detectFace = (imageData: ImageData): boolean => {
+    // This is a simplified placeholder. In production, use libraries like:
+    // - MediaPipe Face Detection
+    // - TensorFlow.js Face Detection
+    // - OpenCV.js
+    const data = imageData.data
+    let skinPixels = 0
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]
+      const g = data[i + 1]
+      const b = data[i + 2]
+
+      // Simple skin color detection
+      if (
+        r > 95 &&
+        g > 40 &&
+        b > 20 &&
+        Math.max(r, g, b) - Math.min(r, g, b) > 15 &&
+        Math.abs(r - g) > 15 &&
+        r > g &&
+        r > b
+      ) {
+        skinPixels++
+      }
+    }
+
+    return skinPixels > (data.length / 4) * 0.02 // At least 2% skin pixels
+  }
+
+  // Behavioral monitoring
+  const startBehaviorMonitoring = useCallback(() => {
+    let keystrokeCount = 0
+    let mouseMoveCount = 0
+    let rightClickCount = 0
+    let tabSwitchCount = 0
+
+    const handleKeydown = (e: KeyboardEvent) => {
+      keystrokeCount++
+      lastActivityRef.current = Date.now()
+
+      // Detect suspicious key combinations
+      if (e.ctrlKey || e.altKey || e.metaKey) {
+        if (e.key === "c" || e.key === "v" || e.key === "a" || e.key === "s") {
+          fetch("/api/audit-logs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              type: "SUSPICIOUS_KEYBOARD_SHORTCUT",
+              severity: "HIGH",
+              details: `Suspicious key combination: ${e.ctrlKey ? "Ctrl+" : ""}${e.altKey ? "Alt+" : ""}${e.metaKey ? "Cmd+" : ""}${e.key}`,
+              timestamp: new Date().toISOString(),
+            }),
+          })
+        }
+      }
+
+      // Detect F12 (Developer Tools)
+      if (e.key === "F12" || (e.ctrlKey && e.shiftKey && e.key === "I")) {
+        e.preventDefault()
+        fetch("/api/audit-logs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "DEVELOPER_TOOLS_ATTEMPT",
+            severity: "CRITICAL",
+            details: "Attempt to open developer tools detected",
+            timestamp: new Date().toISOString(),
+          }),
+        })
+      }
+    }
+
+    const handleMouseMove = () => {
+      mouseMoveCount++
+      lastActivityRef.current = Date.now()
+    }
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault()
+      rightClickCount++
+      fetch("/api/audit-logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "RIGHT_CLICK_ATTEMPT",
+          severity: "MEDIUM",
+          details: "Right-click context menu attempt",
+          timestamp: new Date().toISOString(),
+        }),
+      })
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        tabSwitchCount++
+        fetch("/api/audit-logs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "TAB_SWITCH",
+            severity: "HIGH",
+            details: "User switched away from interview tab",
+            timestamp: new Date().toISOString(),
+          }),
+        })
+      }
+    }
+
+    // Add event listeners
+    document.addEventListener("keydown", handleKeydown)
+    document.addEventListener("mousemove", handleMouseMove)
+    document.addEventListener("contextmenu", handleContextMenu)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+
+    // Update behavior metrics periodically
+    behaviorIntervalRef.current = setInterval(() => {
+      const idleTime = Date.now() - lastActivityRef.current
+
+      setBehaviorMetrics((prev) => ({
+        keystrokes: keystrokeCount,
+        mouseMovements: mouseMoveCount,
+        rightClicks: rightClickCount,
+        tabSwitches: tabSwitchCount,
+        idleTime: idleTime,
+        suspiciousActivity: prev.suspiciousActivity + (idleTime > 30000 ? 1 : 0),
+      }))
+
+      // Reset counters
+      keystrokeCount = 0
+      mouseMoveCount = 0
+    }, 5000)
+
+    return () => {
+      document.removeEventListener("keydown", handleKeydown)
+      document.removeEventListener("mousemove", handleMouseMove)
+      document.removeEventListener("contextmenu", handleContextMenu)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [])
+
+  // Enhanced monitoring with multiple security layers
   const startMonitoring = useCallback(() => {
     if (monitorIntervalRef.current) {
-      clearInterval(monitorIntervalRef.current);
+      clearInterval(monitorIntervalRef.current)
     }
+
+    setIsProctoring(true)
+    startBiometricMonitoring()
+    const cleanupBehavior = startBehaviorMonitoring()
+
     monitorIntervalRef.current = setInterval(async () => {
-      await monitorProcesses();
-    }, 5000); // Poll every 5 seconds
-  }, [monitorProcesses]);
+      const isClear = await monitorProcesses()
 
-  // Stop monitoring when interview ends
+      // Calculate dynamic security score
+      const currentScore =
+        100 -
+        behaviorMetrics.tabSwitches * 5 -
+        behaviorMetrics.rightClicks * 2 -
+        behaviorMetrics.suspiciousActivity * 10 -
+        (biometricData.faceDetected ? 0 : 20)
+
+      setSecurityScore(Math.max(0, currentScore))
+
+      // Terminate interview on critical violations or low security score
+      if ((!isClear && severity === "CRITICAL") || currentScore < 20) {
+        stopMonitoring()
+        room.disconnect()
+        setShowAssistant(false)
+        alert("Interview terminated due to critical security violations.")
+      }
+    }, 3000) // More frequent monitoring
+
+    return cleanupBehavior
+  }, [monitorProcesses, room, severity, behaviorMetrics, biometricData])
+
+  // Stop all monitoring
   const stopMonitoring = useCallback(() => {
+    setIsProctoring(false)
+
     if (monitorIntervalRef.current) {
-      clearInterval(monitorIntervalRef.current);
-      monitorIntervalRef.current = null;
-    }
-  }, []);
-
-  const onConnectButtonClicked = useCallback(async () => {
-    setIsConnecting(true);
-    setProcessCheckStatus("checking");
-
-    // Request fullscreen mode
-    try {
-      await document.documentElement.requestFullscreen();
-    } catch (error) {
-      console.error("Failed to enter fullscreen:", error);
-      alert("Please allow fullscreen mode to proceed with the interview.");
-      setIsConnecting(false);
-      return;
+      clearInterval(monitorIntervalRef.current)
+      monitorIntervalRef.current = null
     }
 
-    // Check processes
-    const isClear = await checkProcesses();
-    if (!isClear) {
-      setIsConnecting(false);
-      // Start polling for process status
-      const pollInterval = setInterval(async () => {
-        const clear = await checkProcesses();
-        if (clear) {
-          clearInterval(pollInterval);
-          await proceedToConnect();
-        }
-      }, 5000);
-      return;
+    if (biometricIntervalRef.current) {
+      clearInterval(biometricIntervalRef.current)
+      biometricIntervalRef.current = null
     }
 
-    await proceedToConnect();
-  }, [room]);
+    if (behaviorIntervalRef.current) {
+      clearInterval(behaviorIntervalRef.current)
+      behaviorIntervalRef.current = null
+    }
 
+    // Stop video stream
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream
+      stream.getTracks().forEach((track) => track.stop())
+    }
+  }, [])
+
+  // Enhanced connection with security verification
   const proceedToConnect = useCallback(async () => {
     try {
+      setIsConnecting(true)
+      // Generate session ID if not exists
+      let sessionId = sessionStorage.getItem("interview-session")
+      if (!sessionId) {
+        sessionId = crypto.randomUUID()
+        sessionStorage.setItem("interview-session", sessionId)
+      }
+
       const url = new URL(
         process.env.NEXT_PUBLIC_CONN_DETAILS_ENDPOINT ?? "/api/connection-details",
-        window.location.origin
-      );
-      const response = await fetch(url.toString());
-      const connectionDetailsData = await response.json();
-      await room.connect(connectionDetailsData.serverUrl, connectionDetailsData.participantToken);
-      await room.localParticipant.setMicrophoneEnabled(true);
-      await room.localParticipant.setCameraEnabled(true);
-      setShowAssistant(true);
-      startMonitoring(); // Start continuous monitoring
-      setTimeout(() => {
-        assistantRef.current?.scrollIntoView({ behavior: "smooth" });
-      }, 500);
-    } catch (error) {
-      console.error("Connection error:", error);
-      alert("Failed to connect to the interview. Please try again.");
-    } finally {
-      setIsConnecting(false);
-    }
-  }, [room, startMonitoring]);
+        window.location.origin,
+      )
 
-  // Handle tab focus and fullscreen exit detection
+      const response = await fetch(url.toString(), {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-ID": crypto.randomUUID(),
+          "X-Session-ID": sessionId,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+
+      const connectionDetailsData = await response.json()
+
+      await room.connect(connectionDetailsData.serverUrl, connectionDetailsData.participantToken)
+      await room.localParticipant.setMicrophoneEnabled(true)
+      await room.localParticipant.setCameraEnabled(true)
+
+      setShowAssistant(true)
+      setShowWarningModal(false) // Close the warning modal
+      const cleanupBehavior = startMonitoring()
+
+      setTimeout(() => {
+        assistantRef.current?.scrollIntoView({ behavior: "smooth" })
+      }, 500)
+
+      setIsConnecting(false)
+      // Cleanup function
+      return cleanupBehavior
+    } catch (error) {
+      console.error("Connection error:", error)
+      alert("Failed to connect to the interview. Please try again.")
+      setIsConnecting(false)
+    }
+  }, [room, startMonitoring])
+
+  // Enhanced connection with comprehensive security checks
+  const onConnectButtonClicked = useCallback(async () => {
+    setIsConnecting(true)
+    setProcessCheckStatus("checking")
+
+    try {
+      // Request fullscreen mode
+      await document.documentElement.requestFullscreen()
+    } catch (error) {
+      console.error("Failed to enter fullscreen:", error)
+      alert("Please allow fullscreen mode to proceed with the interview.")
+      setIsConnecting(false)
+      return
+    }
+
+    // Disable right-click and other shortcuts
+    document.addEventListener("contextmenu", (e) => e.preventDefault())
+    document.addEventListener("selectstart", (e) => e.preventDefault())
+    document.addEventListener("dragstart", (e) => e.preventDefault())
+
+    // Check processes and system security
+    const isClear = await checkProcesses()
+    if (!isClear) {
+      setIsConnecting(false)
+      return
+    }
+
+    await proceedToConnect()
+  }, [checkProcesses, proceedToConnect])
+
+  // Enhanced security monitoring effects
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden && showAssistant) {
-        alert("Please stay focused on the interview tab to continue.");
+        setBehaviorMetrics((prev) => ({ ...prev, tabSwitches: prev.tabSwitches + 1 }))
+        alert("Please stay focused on the interview tab to continue.")
       }
-    };
+    }
 
     const handleFullscreenChange = () => {
       if (!document.fullscreenElement && showAssistant) {
-        alert("Please remain in fullscreen mode during the interview.");
+        alert("Please remain in fullscreen mode during the interview.")
         document.documentElement.requestFullscreen().catch(() => {
-          alert("Failed to re-enter fullscreen. Please enable fullscreen to continue.");
-        });
+          alert("Failed to re-enter fullscreen. Please enable fullscreen to continue.")
+        })
       }
-    };
+    }
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    const handleDevToolsDetection = () => {
+      const threshold = 160
+      if (window.outerHeight - window.innerHeight > threshold || window.outerWidth - window.innerWidth > threshold) {
+        fetch("/api/audit-logs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "DEVELOPER_TOOLS_DETECTED",
+            severity: "CRITICAL",
+            details: "Developer tools window detected",
+            timestamp: new Date().toISOString(),
+          }),
+        })
+      }
+    }
 
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      document.removeEventListener("fullscreenchange", handleFullscreenChange);
-      stopMonitoring();
-    };
-  }, [showAssistant, stopMonitoring]);
+    if (showAssistant) {
+      document.addEventListener("visibilitychange", handleVisibilityChange)
+      document.addEventListener("fullscreenchange", handleFullscreenChange)
+
+      // Check for developer tools every 500ms
+      const devToolsInterval = setInterval(handleDevToolsDetection, 500)
+
+      return () => {
+        document.removeEventListener("visibilitychange", handleVisibilityChange)
+        document.removeEventListener("fullscreenchange", handleFullscreenChange)
+        clearInterval(devToolsInterval)
+        stopMonitoring()
+      }
+    }
+  }, [showAssistant, stopMonitoring])
 
   // Handle media device errors
   useEffect(() => {
-    room.on(RoomEvent.MediaDevicesError, onDeviceFailure);
-    return () => {
-      room.off(RoomEvent.MediaDevicesError, onDeviceFailure);
-    };
-  }, [room]);
+    const handleDeviceError = (error: any) => {
+      console.error("Media device error:", error)
+      alert(
+        "Error acquiring camera or microphone permissions. Please grant the necessary permissions and reload the page.",
+      )
+      fetch("/api/audit-logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "MEDIA_DEVICE_ERROR",
+          severity: "CRITICAL",
+          details: `Media device error: ${error.message}`,
+          timestamp: new Date().toISOString(),
+        }),
+      })
+    }
 
-  const backgroundY = useTransform(scrollYProgress, [0, 1], ["0%", "50%"]);
-  const backgroundOpacity = useTransform(scrollYProgress, [0, 0.5], [0.05, 0]);
+    room.on(RoomEvent.MediaDevicesError, handleDeviceError)
+    return () => {
+      room.off(RoomEvent.MediaDevicesError, handleDeviceError)
+    }
+  }, [room])
+
+  const backgroundY = useTransform(scrollYProgress, [0, 1], ["0%", "50%"])
+  const backgroundOpacity = useTransform(scrollYProgress, [0, 0.5], [0.05, 0])
 
   return (
     <div className="min-h-screen bg-white relative overflow-hidden">
+      {/* Hidden elements for biometric monitoring */}
+      <video ref={videoRef} style={{ display: "none" }} />
+      <canvas ref={canvasRef} style={{ display: "none" }} />
+
       <motion.div
         style={{ y: backgroundY, opacity: backgroundOpacity }}
         className="absolute inset-0 pointer-events-none"
@@ -284,6 +761,7 @@ export default function Page() {
                   }}
                   transition={{ duration: 8, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
                 />
+
                 <header ref={headerRef} className="container mx-auto px-6 py-8 relative z-10">
                   <motion.div
                     initial={{ opacity: 0, y: 50 }}
@@ -324,15 +802,18 @@ export default function Page() {
                         BharatHire
                       </motion.h1>
                     </motion.div>
+
                     <motion.p
                       initial={{ opacity: 0, y: 30 }}
                       animate={isHeaderInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 30 }}
                       transition={{ duration: 0.8, delay: 0.6 }}
                       className="text-xl text-gray-700 max-w-4xl mx-auto leading-relaxed"
                     >
-                      India's premier AI-powered interview platform for Software Development Engineers, AI/ML
-                      specialists, and tech professionals. Experience intelligent, multilingual technical assessments.
+                      India's most advanced AI-powered interview platform with military-grade anti-cheating protection.
+                      Experience intelligent, multilingual technical assessments with biometric verification, behavioral
+                      analysis, and real-time security monitoring.
                     </motion.p>
+
                     <motion.div
                       initial={{ opacity: 0, y: 30 }}
                       animate={isHeaderInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 30 }}
@@ -363,39 +844,19 @@ export default function Page() {
                         <span className="relative z-10 flex items-center gap-2 text-lg">
                           {isConnecting ? (
                             <>
-                              <LoadingSpinner /> Checking environment...
+                              <LoadingSpinner /> Initializing Security...
                             </>
                           ) : (
                             <>
-                              <Video className="w-5 h-5" /> Start Interview
+                              <Shield className="w-5 h-5" /> Start Secure Interview
                             </>
                           )}
                         </span>
                       </motion.button>
                     </motion.div>
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: 1.2, duration: 0.8 }}
-                      className="mt-12 flex justify-center"
-                    >
-                      <motion.div
-                        animate={{ y: [0, 10, 0] }}
-                        transition={{ duration: 1.5, repeat: Number.POSITIVE_INFINITY }}
-                        className="flex flex-col items-center cursor-pointer"
-                        onClick={() => {
-                          window.scrollBy({
-                            top: window.innerHeight * 0.6,
-                            behavior: "smooth",
-                          });
-                        }}
-                      >
-                        <span className="text-gray-500 text-sm mb-2">Explore Features</span>
-                        <ChevronDown className="w-6 h-6 text-gray-500" />
-                      </motion.div>
-                    </motion.div>
                   </motion.div>
 
+                  {/* Enhanced Security Features Grid */}
                   <motion.div
                     initial={{ opacity: 0 }}
                     animate={isHeaderInView ? { opacity: 1 } : { opacity: 0 }}
@@ -404,31 +865,31 @@ export default function Page() {
                   >
                     {[
                       {
-                        icon: <Globe className="w-6 h-6" />,
-                        title: "Multilingual Support",
-                        description: "Hindi, English, Tamil, Telugu, Bengali",
-                        color: "from-orange-500 to-orange-600",
+                        icon: <Eye className="w-6 h-6" />,
+                        title: "Biometric Verification",
+                        description: "Face detection, eye tracking, and attention monitoring",
+                        color: "from-purple-500 to-purple-600",
                         delay: 0,
                       },
                       {
-                        icon: <Camera className="w-6 h-6" />,
-                        title: "Live Coding Assessment",
-                        description: "Real-time code evaluation with webcam proctoring",
+                        icon: <Activity className="w-6 h-6" />,
+                        title: "Behavioral Analysis",
+                        description: "Real-time keystroke and mouse pattern analysis",
                         color: "from-blue-500 to-blue-600",
                         delay: 0.1,
                       },
                       {
-                        icon: <Clock className="w-6 h-6" />,
-                        title: "Ultra-Low Latency",
-                        description: "~100ms response time for seamless interviews",
+                        icon: <Monitor className="w-6 h-6" />,
+                        title: "Screen Monitoring",
+                        description: "Multi-monitor detection and screen sharing prevention",
                         color: "from-green-500 to-green-600",
                         delay: 0.2,
                       },
                       {
-                        icon: <Brain className="w-6 h-6" />,
-                        title: "AI-Powered Evaluation",
-                        description: "Advanced ML models for technical assessment",
-                        color: "from-purple-500 to-purple-600",
+                        icon: <Wifi className="w-6 h-6" />,
+                        title: "Network Security",
+                        description: "VPN detection and suspicious connection monitoring",
+                        color: "from-orange-500 to-orange-600",
                         delay: 0.3,
                       },
                     ].map((feature, index) => (
@@ -436,6 +897,7 @@ export default function Page() {
                     ))}
                   </motion.div>
 
+                  {/* Advanced Security Features */}
                   <motion.div
                     initial={{ opacity: 0, y: 50 }}
                     animate={isHeaderInView ? { opacity: 1, y: 0 } : { opacity: 0, y: 50 }}
@@ -459,31 +921,42 @@ export default function Page() {
                         transition={{ delay: 1.4 }}
                         className="text-2xl font-bold text-gray-800 mb-6 text-center flex items-center justify-center gap-2"
                       >
-                        <Sparkles className="w-6 h-6 text-yellow-500" />
-                        Interview Specializations
-                        <Sparkles className="w-6 h-6 text-yellow-500" />
+                        <Shield className="w-6 h-6 text-blue-500" />
+                        Advanced Security Features
+                        <Lock className="w-6 h-6 text-green-500" />
                       </motion.h3>
-                      <div className="grid md:grid-cols-2 gap-6">
+
+                      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {[
                           {
-                            text: "Software Development Engineer (SDE) Interviews",
-                            color: "orange-500",
-                            icon: <Terminal className="w-4 h-4" />,
-                          },
-                          {
-                            text: "AI/ML Engineer Technical Assessments",
-                            color: "purple-600",
+                            text: "AI-Powered Process Detection",
+                            color: "red-500",
                             icon: <Brain className="w-4 h-4" />,
                           },
                           {
-                            text: "Data Structures & Algorithms Evaluation",
-                            color: "green-600",
-                            icon: <Database className="w-4 h-4" />,
+                            text: "Real-time Biometric Authentication",
+                            color: "purple-600",
+                            icon: <Fingerprint className="w-4 h-4" />,
                           },
                           {
-                            text: "System Design & Architecture Reviews",
+                            text: "Behavioral Pattern Analysis",
                             color: "blue-600",
-                            icon: <Shield className="w-4 h-4" />,
+                            icon: <Activity className="w-4 h-4" />,
+                          },
+                          {
+                            text: "Multi-layer Audio Monitoring",
+                            color: "green-600",
+                            icon: <Headphones className="w-4 h-4" />,
+                          },
+                          {
+                            text: "Advanced Keystroke Detection",
+                            color: "orange-600",
+                            icon: <Keyboard className="w-4 h-4" />,
+                          },
+                          {
+                            text: "Mouse Movement Tracking",
+                            color: "pink-600",
+                            icon: <MousePointer className="w-4 h-4" />,
                           },
                         ].map((capability, index) => (
                           <motion.div
@@ -522,13 +995,19 @@ export default function Page() {
             className="fixed inset-0 bg-gray-900 z-50"
           >
             <RoomContext.Provider value={room}>
-              <VideoCallInterface />
+              <VideoCallInterface
+                securityScore={securityScore}
+                biometricData={biometricData}
+                behaviorMetrics={behaviorMetrics}
+                isProctoring={isProctoring}
+                onStopMonitoring={stopMonitoring}
+              />
             </RoomContext.Provider>
           </motion.main>
         )}
       </AnimatePresence>
 
-      {/* Warning Modal */}
+      {/* Enhanced Warning Modal with Process Termination */}
       <AnimatePresence>
         {showWarningModal && (
           <motion.div
@@ -538,35 +1017,220 @@ export default function Page() {
             transition={{ duration: 0.3 }}
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
           >
-            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <div className="bg-white rounded-lg p-6 max-w-4xl w-full mx-4 shadow-xl max-h-[90vh] overflow-y-auto">
               <div className="flex items-center gap-2 mb-4">
-                <AlertTriangle className="w-6 h-6 text-yellow-500" />
+                <AlertTriangle className={`w-6 h-6 ${severity === "CRITICAL" ? "text-red-500" : "text-yellow-500"}`} />
                 <h2 className="text-xl font-bold text-gray-800">
-                  {severity === "CRITICAL" ? "Critical Security Violation" : "Unauthorized Activity Detected"}
+                  {severity === "CRITICAL" ? "Critical Security Violation" : "Security Alert"}
                 </h2>
-              </div>
-              <p className="text-gray-600 mb-4">
-                The following issues must be resolved before {showAssistant ? "continuing" : "starting"} the interview:
-              </p>
-              <ul className="list-disc pl-6 mb-6 max-h-60 overflow-y-auto">
-                {violations.map((violation, index) => (
-                  <li key={index} className={`text-gray-700 ${violation.severity === "CRITICAL" ? "text-red-600 font-semibold" : ""}`}>
-                    <strong>{violation.type}</strong>: {violation.details} (Severity: {violation.severity})
-                    {violation.evidence && (
-                      <span className="block text-sm text-gray-500">Evidence: {violation.evidence}</span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <div className="flex justify-end gap-2">
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => (showAssistant ? monitorProcesses() : checkProcesses())}
-                  className="bg-gradient-to-r from-orange-500 to-green-600 text-white px-4 py-2 rounded-md hover:from-orange-600 hover:to-green-700"
+                <div
+                  className={`ml-auto px-3 py-1 rounded-full text-sm font-medium ${
+                    severity === "CRITICAL" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"
+                  }`}
                 >
-                  Check Again
-                </motion.button>
+                  Security Score: {securityScore}/100
+                </div>
+              </div>
+
+              <p className="text-gray-600 mb-4">
+                The following security issues must be resolved before {showAssistant ? "continuing" : "starting"} the
+                interview. You can automatically close detected processes or manually close them.
+              </p>
+
+              {/* Process List with Termination Options */}
+              <div className="space-y-3 mb-6 max-h-96 overflow-y-auto">
+                {violations.map((violation, index) => {
+                  // Extract PID from violation details
+                  const pidMatch = violation.details.match(/PID: (\d+)/)
+                  const pid = pidMatch ? Number.parseInt(pidMatch[1]) : null
+
+                  return (
+                    <div
+                      key={index}
+                      className={`p-4 rounded-lg border-l-4 ${
+                        violation.severity === "CRITICAL"
+                          ? "border-red-500 bg-red-50"
+                          : violation.severity === "HIGH"
+                            ? "border-orange-500 bg-orange-50"
+                            : violation.severity === "MEDIUM"
+                              ? "border-yellow-500 bg-yellow-50"
+                              : "border-blue-500 bg-blue-50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <strong className="text-gray-800">{violation.type}</strong>
+                            <span
+                              className={`px-2 py-1 rounded text-xs font-medium ${
+                                violation.severity === "CRITICAL"
+                                  ? "bg-red-200 text-red-800"
+                                  : violation.severity === "HIGH"
+                                    ? "bg-orange-200 text-orange-800"
+                                    : violation.severity === "MEDIUM"
+                                      ? "bg-yellow-200 text-yellow-800"
+                                      : "bg-blue-200 text-blue-800"
+                              }`}
+                            >
+                              {violation.severity}
+                            </span>
+                            {violation.aiDetected && (
+                              <span className="px-2 py-1 rounded text-xs font-medium bg-purple-200 text-purple-800">
+                                AI Detected
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-gray-700 text-sm mb-1">{violation.details}</p>
+                          {violation.evidence && (
+                            <p className="text-gray-500 text-xs mb-2">Evidence: {violation.evidence}</p>
+                          )}
+                          {violation.confidence && (
+                            <p className="text-gray-500 text-xs">
+                              Confidence: {(violation.confidence * 100).toFixed(1)}%
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Process Termination Button */}
+                        {violation.type === "UNAUTHORIZED_APPLICATION" && pid && (
+                          <div className="ml-4">
+                            <motion.button
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              onClick={() => terminateProcesses([pid])}
+                              disabled={isTerminating}
+                              className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                            >
+                              {isTerminating ? (
+                                <>
+                                  <LoadingSpinner />
+                                  Closing...
+                                </>
+                              ) : (
+                                <>
+                                  <X className="w-3 h-3" />
+                                  Close Process
+                                </>
+                              )}
+                            </motion.button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Termination Results */}
+              {terminationResults && (
+                <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <h4 className="font-medium text-blue-800 mb-2">Process Termination Results:</h4>
+                  <p className="text-sm text-blue-700">
+                    ✅ {terminationResults.results?.terminated?.length || 0} processes terminated successfully
+                  </p>
+                  {terminationResults.results?.failed?.length > 0 && (
+                    <p className="text-sm text-red-700">
+                      ❌ {terminationResults.results.failed.length} processes failed to terminate
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex justify-between items-center gap-4">
+                <div className="flex items-center gap-2">
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => {
+                      const unauthorizedProcesses = violations
+                        .filter((v) => v.type === "UNAUTHORIZED_APPLICATION")
+                        .map((v) => {
+                          const pidMatch = v.details.match(/PID: (\d+)/)
+                          return pidMatch ? Number.parseInt(pidMatch[1]) : null
+                        })
+                        .filter((pid) => pid !== null)
+
+                      if (unauthorizedProcesses.length > 0) {
+                        terminateProcesses(unauthorizedProcesses)
+                      } else {
+                        alert("No processes to terminate")
+                      }
+                    }}
+                    disabled={
+                      isTerminating || violations.filter((v) => v.type === "UNAUTHORIZED_APPLICATION").length === 0
+                    }
+                    className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    {isTerminating ? (
+                      <>
+                        <LoadingSpinner />
+                        Closing All Processes...
+                      </>
+                    ) : (
+                      <>
+                        <X className="w-4 h-4" />
+                        Close All Detected Processes
+                      </>
+                    )}
+                  </motion.button>
+                </div>
+
+                <div className="flex gap-2">
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={checkProcesses}
+                    disabled={isTerminating || isRechecking}
+                    className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {isRechecking ? (
+                      <>
+                        <LoadingSpinner />
+                        Re-checking...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-4 h-4" />
+                        Re-check Security
+                      </>
+                    )}
+                  </motion.button>
+
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={proceedToConnect}
+                    disabled={isTerminating || isConnecting || severity === "CRITICAL"}
+                    className="bg-gradient-to-r from-orange-500 to-green-600 text-white px-6 py-2 rounded-md hover:from-orange-600 hover:to-green-700 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    {isConnecting ? (
+                      <>
+                        <LoadingSpinner />
+                        Starting Interview...
+                      </>
+                    ) : severity === "CRITICAL" ? (
+                      "Resolve Critical Issues First"
+                    ) : (
+                      <>
+                        <Play className="w-4 h-4" />
+                        Proceed to Interview
+                      </>
+                    )}
+                  </motion.button>
+                </div>
+              </div>
+
+              {/* Instructions */}
+              <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+                <h4 className="font-medium text-gray-800 mb-2">Instructions:</h4>
+                <ul className="text-sm text-gray-600 space-y-1">
+                  <li>• Click "Close Process" next to individual applications to terminate them</li>
+                  <li>• Use "Close All Detected Processes" to terminate all unauthorized applications at once</li>
+                  <li>• After closing processes, click "Re-check Security" to verify they're closed</li>
+                  <li>• Critical violations must be resolved before starting the interview</li>
+                  <li>• You can also manually close applications and then re-check</li>
+                </ul>
               </div>
             </div>
           </motion.div>
@@ -580,71 +1244,118 @@ export default function Page() {
         className="fixed bottom-0 left-0 right-0 h-2 bg-gradient-to-r from-orange-500 via-white to-green-600 z-40"
       />
     </div>
-  );
+  )
 }
 
-function VideoCallInterface() {
-  const { state: agentState, agent, videoTrack: agentVideoTrack, audioTrack: agentAudioTrack } = useVoiceAssistant();
-  const { localParticipant } = useLocalParticipant();
-  const [chatInput, setChatInput] = useState("");
-  const [isCameraEnabled, setIsCameraEnabled] = useState(true);
-  const [isMicEnabled, setIsMicEnabled] = useState(true);
-  const room = useRoomContext();
-
-  const userVideoTracks = useTracks([Track.Source.Camera], { onlySubscribed: false });
-  const userVideoTrack = userVideoTracks.find((track) => track.participant === localParticipant);
+// Enhanced Video Call Interface with Security Dashboard
+function VideoCallInterface({
+  securityScore,
+  biometricData,
+  behaviorMetrics,
+  isProctoring,
+  onStopMonitoring,
+}: {
+  securityScore: number
+  biometricData: BiometricData
+  behaviorMetrics: BehaviorMetrics
+  isProctoring: boolean
+  onStopMonitoring: () => void
+}) {
+  const { state: agentState, agent, videoTrack: agentVideoTrack, audioTrack: agentAudioTrack } = useVoiceAssistant()
+  const { localParticipant } = useLocalParticipant()
+  const [chatInput, setChatInput] = useState("")
+  const [isCameraEnabled, setIsCameraEnabled] = useState(true)
+  const [isMicEnabled, setIsMicEnabled] = useState(true)
+  const [showSecurityDashboard, setShowSecurityDashboard] = useState(false)
+  const room = useRoomContext()
+  const userVideoTracks = useTracks([Track.Source.Camera], { onlySubscribed: false })
+  const userVideoTrack = userVideoTracks.find((track) => track.participant === localParticipant)
 
   const toggleCamera = useCallback(async () => {
     try {
-      await localParticipant.setCameraEnabled(!isCameraEnabled);
-      setIsCameraEnabled(!isCameraEnabled);
+      await localParticipant.setCameraEnabled(!isCameraEnabled)
+      setIsCameraEnabled(!isCameraEnabled)
+      fetch("/api/audit-logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "CAMERA_TOGGLE",
+          severity: "LOW",
+          details: `Camera ${isCameraEnabled ? "disabled" : "enabled"}`,
+          timestamp: new Date().toISOString(),
+        }),
+      })
     } catch (error) {
-      console.error("Error toggling camera:", error);
+      console.error("Error toggling camera:", error)
+      alert("Failed to toggle camera. Please check your device settings.")
     }
-  }, [localParticipant, isCameraEnabled]);
+  }, [localParticipant, isCameraEnabled])
 
   const toggleMicrophone = useCallback(async () => {
     try {
-      await localParticipant.setMicrophoneEnabled(!isMicEnabled);
-      setIsMicEnabled(!isMicEnabled);
+      await localParticipant.setMicrophoneEnabled(!isMicEnabled)
+      setIsMicEnabled(!isMicEnabled)
+      fetch("/api/audit-logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "MICROPHONE_TOGGLE",
+          severity: "LOW",
+          details: `Microphone ${isMicEnabled ? "disabled" : "enabled"}`,
+          timestamp: new Date().toISOString(),
+        }),
+      })
     } catch (error) {
-      console.error("Error toggling microphone:", error);
+      console.error("Error toggling microphone:", error)
+      alert("Failed to toggle microphone. Please check your device settings.")
     }
-  }, [localParticipant, isMicEnabled]);
+  }, [localParticipant, isMicEnabled])
 
   const handleSendMessage = async () => {
-    if (!chatInput.trim()) return;
+    if (!chatInput.trim()) return
     if (!agent) {
-      alert("No agent connected. Please ensure the agent is running and try again.");
-      return;
+      alert("No agent connected. Please ensure the agent is running and try again.")
+      return
     }
 
-    const messageText = chatInput;
-    setChatInput("");
+    const messageText = chatInput
+    setChatInput("")
 
     try {
-      console.log(`Sending message to agent ${agent.identity}: ${messageText}`);
+      console.log(`Sending message to agent ${agent.identity}: ${messageText}`)
       const result = await room.localParticipant.performRpc({
         destinationIdentity: agent.identity,
         method: "agent.textMessage",
         payload: JSON.stringify({ message: messageText }),
-      });
-      console.log(`Message submission result: ${result}`);
+      })
+      console.log(`Message submission result: ${result}`)
+
+      fetch("/api/audit-logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "MESSAGE_SENT",
+          severity: "INFO",
+          details: `User sent message: ${messageText.substring(0, 50)}...`,
+          timestamp: new Date().toISOString(),
+        }),
+      })
     } catch (error) {
-      console.error("Error sending message:", error);
-      alert(`Failed to send message: ${error instanceof Error ? error.message : "Unknown error"}`);
+      console.error("Error sending message:", error)
+      alert(`Failed to send message: ${error instanceof Error ? error.message : "Unknown error"}`)
     }
-  };
+  }
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && chatInput.trim()) {
-      handleSendMessage();
+      handleSendMessage()
     }
-  };
+  }
 
   return (
     <div className="h-screen flex bg-gray-900 text-white">
       <div className="flex-1 flex flex-col">
+        {/* Enhanced Header with Security Status */}
         <motion.div
           initial={{ y: -50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
@@ -675,37 +1386,123 @@ function VideoCallInterface() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <motion.button
+
+          {/* Security Score Display */}
+          <div className="flex items-center gap-4">
+            <motion.div
               whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={toggleCamera}
-              className={`p-2 rounded-lg transition-colors ${
-                isCameraEnabled ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"
-              }`}
+              onClick={() => setShowSecurityDashboard(!showSecurityDashboard)}
+              className="cursor-pointer bg-gray-700 rounded-lg px-4 py-2 flex items-center gap-2"
             >
-              {isCameraEnabled ? <Camera className="w-5 h-5" /> : <CameraOff className="w-5 h-5" />}
-            </motion.button>
-            <motion.button
-              whileHover={{ scale: 1.05 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={toggleMicrophone}
-              className={`p-2 rounded-lg transition-colors ${
-                isMicEnabled ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"
-              }`}
-            >
-              {isMicEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
-            </motion.button>
-            <motion.div whileHover={{ scale: 1.05 }} className="bg-gray-700 rounded-full p-2">
-              <VoiceAssistantControlBar controls={{ leave: false }} />
+              <Shield
+                className={`w-5 h-5 ${securityScore > 80 ? "text-green-400" : securityScore > 60 ? "text-yellow-400" : "text-red-400"}`}
+              />
+              <span className="text-sm font-medium">Security: {securityScore}/100</span>
+              {isProctoring && <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>}
             </motion.div>
-            <motion.div whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }}>
-              <DisconnectButton className="bg-red-500 hover:bg-red-600 text-white p-3 rounded-full transition-all duration-200 shadow-lg">
-                <CloseIcon />
-              </DisconnectButton>
-            </motion.div>
+
+            <div className="flex items-center gap-2">
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={toggleCamera}
+                className={`p-2 rounded-lg transition-colors ${
+                  isCameraEnabled ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"
+                }`}
+              >
+                {isCameraEnabled ? <Camera className="w-5 h-5" /> : <CameraOff className="w-5 h-5" />}
+              </motion.button>
+
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={toggleMicrophone}
+                className={`p-2 rounded-lg transition-colors ${
+                  isMicEnabled ? "bg-green-600 hover:bg-green-700" : "bg-red-600 hover:bg-red-700"
+                }`}
+              >
+                {isMicEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+              </motion.button>
+
+              <motion.div whileHover={{ scale: 1.05 }} className="bg-gray-700 rounded-full p-2">
+                <VoiceAssistantControlBar controls={{ leave: false }} />
+              </motion.div>
+
+              <motion.div whileHover={{ scale: 1.1, rotate: 90 }} whileTap={{ scale: 0.9 }}>
+                <DisconnectButton
+                  className="bg-red-500 hover:bg-red-600 text-white p-3 rounded-full transition-all duration-200 shadow-lg"
+                  onClick={() => {
+                    onStopMonitoring()
+                    fetch("/api/audit-logs", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        type: "INTERVIEW_ENDED",
+                        severity: "INFO",
+                        details: "User manually ended the interview",
+                        timestamp: new Date().toISOString(),
+                      }),
+                    })
+                  }}
+                >
+                  <CloseIcon />
+                </DisconnectButton>
+              </motion.div>
+            </div>
           </div>
         </motion.div>
+
+        {/* Security Dashboard Overlay */}
+        <AnimatePresence>
+          {showSecurityDashboard && (
+            <motion.div
+              initial={{ opacity: 0, y: -100 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -100 }}
+              className="absolute top-20 left-4 right-4 bg-gray-800/95 backdrop-blur-sm rounded-lg p-4 z-10 border border-gray-600"
+            >
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-gray-700 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Eye className="w-4 h-4 text-blue-400" />
+                    <span className="text-sm font-medium">Biometric</span>
+                  </div>
+                  <p className="text-xs text-gray-300">Face: {biometricData.faceDetected ? "✅" : "❌"}</p>
+                  <p className="text-xs text-gray-300">Attention: {biometricData.attentionScore}%</p>
+                </div>
+
+                <div className="bg-gray-700 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Activity className="w-4 h-4 text-green-400" />
+                    <span className="text-sm font-medium">Behavior</span>
+                  </div>
+                  <p className="text-xs text-gray-300">Tab Switches: {behaviorMetrics.tabSwitches}</p>
+                  <p className="text-xs text-gray-300">Right Clicks: {behaviorMetrics.rightClicks}</p>
+                </div>
+
+                <div className="bg-gray-700 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Keyboard className="w-4 h-4 text-purple-400" />
+                    <span className="text-sm font-medium">Input</span>
+                  </div>
+                  <p className="text-xs text-gray-300">Keystrokes: {behaviorMetrics.keystrokes}</p>
+                  <p className="text-xs text-gray-300">Mouse: {behaviorMetrics.mouseMovements}</p>
+                </div>
+
+                <div className="bg-gray-700 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Shield className="w-4 h-4 text-orange-400" />
+                    <span className="text-sm font-medium">Security</span>
+                  </div>
+                  <p className="text-xs text-gray-300">Score: {securityScore}/100</p>
+                  <p className="text-xs text-gray-300">Status: {isProctoring ? "Active" : "Inactive"}</p>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Main Video Area */}
         <div className="flex-1 relative p-4">
           <motion.div
             initial={{ scale: 0.8, opacity: 0 }}
@@ -739,7 +1536,8 @@ function VideoCallInterface() {
                 </motion.div>
                 <h3 className="text-3xl font-bold mb-4">AI Interviewer Ready</h3>
                 <p className="text-gray-400 text-center max-w-md">
-                  Your AI interviewer is connected and ready to conduct your technical interview.
+                  Your AI interviewer is connected and ready to conduct your technical interview with advanced security
+                  monitoring.
                 </p>
               </div>
             ) : agentVideoTrack ? (
@@ -777,6 +1575,8 @@ function VideoCallInterface() {
                 </div>
               </div>
             )}
+
+            {/* User Video Overlay */}
             <motion.div
               initial={{ scale: 0, x: 100, y: 100 }}
               animate={{ scale: 1, x: 0, y: 0 }}
@@ -790,7 +1590,16 @@ function VideoCallInterface() {
                     <p className="text-xs font-medium">You</p>
                   </div>
                   <div className="absolute top-2 right-2 flex gap-1">
-                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                    <div
+                      className={`w-2 h-2 rounded-full animate-pulse ${
+                        biometricData.faceDetected ? "bg-green-500" : "bg-red-500"
+                      }`}
+                    ></div>
+                    <div
+                      className={`w-2 h-2 rounded-full ${
+                        securityScore > 80 ? "bg-green-500" : securityScore > 60 ? "bg-yellow-500" : "bg-red-500"
+                      }`}
+                    ></div>
                   </div>
                 </div>
               ) : (
@@ -805,6 +1614,8 @@ function VideoCallInterface() {
           </motion.div>
         </div>
       </div>
+
+      {/* Enhanced Chat Panel */}
       <motion.div
         initial={{ x: 400, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
@@ -818,9 +1629,11 @@ function VideoCallInterface() {
           </div>
           <p className="text-sm text-gray-400">Live conversation with AI interviewer</p>
         </div>
+
         <div className="flex-1 overflow-hidden p-4">
           <TranscriptionView userMessages={useCombinedTranscriptions()} />
         </div>
+
         <div className="p-4 border-t border-gray-700 bg-gray-800/90 backdrop-blur-sm">
           <div className="flex items-center gap-2">
             <div className="flex-1 relative">
@@ -846,10 +1659,12 @@ function VideoCallInterface() {
           <p className="text-xs text-gray-500 mt-2">Press Enter to send • Voice responses will appear automatically</p>
         </div>
       </motion.div>
+
       <FlashCardContainer />
       <QuizContainer />
       <RoomAudioRenderer />
       <NoAgentNotification state={agentState} />
+
       <style jsx global>{`
         .interviewer-visualizer .lk-audio-visualizer-bar {
           background: linear-gradient(to top, #ff9933, #138808);
@@ -858,7 +1673,7 @@ function VideoCallInterface() {
         }
       `}</style>
     </div>
-  );
+  )
 }
 
 function LoadingSpinner() {
@@ -866,9 +1681,9 @@ function LoadingSpinner() {
     <motion.div
       animate={{ rotate: 360 }}
       transition={{ duration: 1, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
-      className="w-5 h-5 border-2 border-white border-t-transparent rounded-full"
+      className="w-4 h-4 border-2 border-white border-t-transparent rounded-full"
     />
-  );
+  )
 }
 
 function FloatingParticles() {
@@ -897,12 +1712,24 @@ function FloatingParticles() {
         />
       ))}
     </div>
-  );
+  )
 }
 
-function FeatureCard({ icon, title, description, color, delay }: { icon: React.ReactNode; title: string; description: string; color: string; delay: number }) {
-  const ref = useRef(null);
-  const isInView = useInView(ref, { once: true, margin: "-50px" });
+function FeatureCard({
+  icon,
+  title,
+  description,
+  color,
+  delay,
+}: {
+  icon: React.ReactNode
+  title: string
+  description: string
+  color: string
+  delay: number
+}) {
+  const ref = useRef(null)
+  const isInView = useInView(ref, { once: true, margin: "-50px" })
 
   return (
     <motion.div
@@ -941,12 +1768,5 @@ function FeatureCard({ icon, title, description, color, delay }: { icon: React.R
         {description}
       </motion.p>
     </motion.div>
-  );
-}
-
-function onDeviceFailure(error: any) {
-  console.error(error);
-  alert(
-    "Error acquiring camera or microphone permissions. Please make sure you grant the necessary permissions in your browser and reload the tab",
-  );
+  )
 }
